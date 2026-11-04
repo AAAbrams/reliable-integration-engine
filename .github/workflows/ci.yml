@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Code quality and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      APP_ENV: testing
+      APP_DEBUG: 'true'
+      APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_DATABASE: rie_test
+      DB_USERNAME: rie_test
+      DB_PASSWORD: ci_test_password
+      DB_URL: ''
+      CACHE_STORE: array
+      SESSION_DRIVER: array
+      QUEUE_CONNECTION: sync
+      MAIL_MAILER: array
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: rie_test
+          POSTGRES_USER: rie_test
+          POSTGRES_PASSWORD: ci_test_password
+          TZ: UTC
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U rie_test -d rie_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up PHP and Composer
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_pgsql, mbstring, dom, xml, xmlwriter
+          tools: composer:v2
+          coverage: none
+
+      - name: Locate Composer cache
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer downloads
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php-8.4-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: ${{ runner.os }}-php-8.4-composer-
+
+      - name: Validate Composer configuration
+        run: composer validate --strict
+
+      - name: Install dependencies from lock file
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Check installed dependencies
+        run: |
+          composer check-platform-reqs
+          git diff --exit-code -- composer.lock
+
+      - name: Clear Laravel configuration cache
+        run: php artisan config:clear
+
+      - name: Check formatting with Pint
+        run: composer lint
+
+      - name: Analyse with PHPStan and Larastan
+        run: composer analyse
+
+      - name: Run Pest tests
+        run: composer test
