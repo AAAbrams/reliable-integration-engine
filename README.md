@@ -1,5 +1,7 @@
 # Reliable Integration Engine (RIE)
 
+[![CI](https://github.com/AAAbrams/reliable-integration-engine/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AAAbrams/reliable-integration-engine/actions/workflows/ci.yml?query=branch%3Amain)
+
 RIE — оригинальная эталонная реализация на Laravel для надёжного выполнения долгих внешних операций.
 Проект должен показать, как сохранять запросы, обрабатывать неопределённый результат HTTP вызова,
 повторять попытки и восстанавливать обработку после сбоев.
