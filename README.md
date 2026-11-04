@@ -15,10 +15,11 @@ RIE — оригинальная эталонная реализация на La
 - конфигурация Pest, Laravel Pint и PHPStan с Larastan;
 - шаблонный Unit-тест и smoke test подключения к отдельной PostgreSQL;
 - Docker Compose с PHP FPM, Nginx, PostgreSQL 18 и тестовой PostgreSQL;
+- workflow GitHub Actions для проверки качества кода и тестов;
 - архитектурная спецификация и шаблон журнала решений.
 
 API операций, доменные модели, PostgreSQL workers и Fake Provider ещё предстоит реализовать.
-Конфигурации CI нет. Наличие стандартной Laravel queue не означает реализации DB scanner или lease/fencing.
+Наличие стандартной Laravel queue не означает реализации DB scanner или lease/fencing.
 
 ## Проблема и демонстрационный сценарий
 
@@ -185,11 +186,15 @@ docker compose --profile test down --volumes
 | `composer test`    | Очистка config cache и запуск тестов через Artisan.              |
 | `composer check`   | Последовательный запуск lint, analyse и test.                    |
 
-В [phpunit.xml](phpunit.xml) настроены suites Unit и Feature, синхронная очередь и принудительное подключение
-к `postgres-test:5432/rie_test` под отдельным пользователем `rie_test`. Пароль `rie-test-only` — публичное
-демонстрационное значение исключительно для изолированного локального тестового сервиса. `DB_URL` обнулён;
-параметры основной БД не наследуются. Дополнительный `.env.testing` не требуется.
-Smoke test проверяет `SELECT 1`, фактическое имя БД и UTC, без `RefreshDatabase` и создания таблиц.
+В [phpunit.xml](phpunit.xml) настроены suites Unit и Feature, синхронная очередь и значения подключения
+по умолчанию: `postgres-test:5432/rie_test`, пользователь `rie_test`, пароль `rie-test-only`.
+Это публичные демонстрационные значения исключительно для изолированного локального тестового сервиса.
+Переменные окружения процесса `DB_*` имеют приоритет над этими значениями; параметры из локального `.env`
+не заменяют уже заданные тестовые значения. `DB_URL` принудительно обнулён, чтобы URL основной БД
+не подменил тестовое подключение. Перед запуском не экспортируйте параметры основной БД в процесс тестов.
+Дополнительный `.env.testing` не требуется.
+Smoke test проверяет фактический PDO-драйвер `pgsql`, `SELECT 1`, тестовую БД `rie_test` и UTC,
+без привязки к имени хоста, `RefreshDatabase` и создания таблиц.
 Проверок бизнес-поведения RIE пока нет.
 
 ```bash
@@ -213,6 +218,38 @@ docker compose exec app composer format
 В текущем checkout проверены сборка и запуск контейнеров, HTTP 200, `artisan about`, Laravel `SELECT 1`
 и UTC; `composer check` прошёл (Pint, PHPStan, 2 теста / 7 assertions). Установка dependencies с чистого
 checkout отдельно не проверялась; проверки использовали существующий `vendor`.
+При подготовке CI повторно прошли `composer install` с существующим `vendor`, `composer validate --strict`,
+`composer check-platform-reqs` и `composer check` в `app`-контейнере. Отдельно прошёл smoke test
+с IP-адресом тестового контейнера через `DB_HOST` и посторонним `DB_URL`, который тестовая конфигурация обнуляет.
+
+## Continuous Integration
+
+Workflow [CI](.github/workflows/ci.yml) запускается при push в `main`, pull request в `main`
+и вручную через `workflow_dispatch`. Один job на Ubuntu имеет лимит 15 минут и permission `contents: read`.
+PHP 8.4 с `pdo_pgsql` и Composer 2 запускаются непосредственно на runner; PostgreSQL 18 — отдельный
+service container с healthcheck, без постоянного volume и без секретов разработки или production.
+
+Именованные шаги проверяют `composer validate --strict`, устанавливают dev-зависимости через
+`composer install` из lock-файла с обычными Composer scripts, проверяют платформу и неизменность lock-файла,
+очищают Laravel config cache, запускают `composer lint`, `composer analyse` и `composer test` (Pest).
+Кешируются только скачанные Composer-архивы; `vendor` и данные PostgreSQL не сохраняются.
+Миграции и сборка frontend сейчас не нужны существующим тестам и в CI не запускаются.
+Проверку миграций можно добавить отдельным шагом перед тестами на следующем этапе.
+
+Для первого запуска создайте pull request в `main` с workflow, откройте вкладку **Checks** либо
+**Actions → CI → Code quality and tests** и проверьте результат каждого шага, включая интеграционный smoke test.
+После появления workflow в основной ветке доступен **Actions → CI → Run workflow**.
+Само наличие файла workflow не подтверждает успешный запуск на GitHub.
+
+При ошибке откройте первый упавший шаг и повторите соответствующую Composer-команду локально
+в `app`-контейнере; полный аналог проверок качества — `docker compose exec app composer check`
+после запуска `postgres-test`, как описано выше. Для ошибок установки проверьте lock-файл и
+`composer check-platform-reqs`. Для ошибок подключения изучите healthcheck service container,
+наличие `pdo_pgsql`, адрес БД и приоритет настроек тестового окружения.
+В Actions ожидается `127.0.0.1:5432/rie_test`, пользователь `rie_test`, временный пароль `ci_test_password`;
+в Compose — `postgres-test:5432` с локальным тестовым паролем. Не подставляйте параметры основной БД.
+CI использует переменные окружения и временный APP_KEY, без копирования `.env` разработчика.
+Workflow проверен через `actionlint`; реальный запуск на GitHub Actions ещё не проверен.
 
 ## Roadmap
 
