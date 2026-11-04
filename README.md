@@ -13,10 +13,11 @@ RIE — оригинальная эталонная реализация на La
 - Laravel skeleton со стандартной welcome page `/` и настроенным health route `/up`;
 - стандартные миграции Laravel для пользователей, sessions, cache и jobs;
 - конфигурация Pest, Laravel Pint и PHPStan с Larastan;
-- один шаблонный Unit-тест;
+- шаблонный Unit-тест и smoke test подключения к отдельной PostgreSQL;
+- Docker Compose с PHP FPM, Nginx, PostgreSQL 18 и тестовой PostgreSQL;
 - архитектурная спецификация и шаблон журнала решений.
 
-API операций, доменные модели, PostgreSQL workers, Fake Provider и Docker Compose ещё предстоит реализовать.
+API операций, доменные модели, PostgreSQL workers и Fake Provider ещё предстоит реализовать.
 Конфигурации CI нет. Наличие стандартной Laravel queue не означает реализации DB scanner или lease/fencing.
 
 ## Проблема и демонстрационный сценарий
@@ -79,9 +80,9 @@ Composer package, ручной replay терминальных операций 
 |---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
 | PHP           | Целевая версия разработки — 8.4; требования к patch-релизу определяются зависимостями. Совместимость полного dev-окружения с PHP 8.3 не подтверждена. |
 | Laravel       | Laravel 13.                                                                                                                                           |
-| База данных   | В `.env.example` по умолчанию SQLite; целевая СУБД MVP — PostgreSQL.                                                                                  |
-| Окружение     | Docker Compose запланирован; файлов окружения Docker пока нет.                                                                                        |
-| Тестирование  | Pest 5; текущая тестовая конфигурация использует SQLite `:memory:`.                                                                                   |
+| База данных   | PostgreSQL 18; соединение Laravel и сервер используют UTC.                                                                                  |
+| Окружение     | Docker Compose: app, nginx, postgres и postgres-test (profile test).                                                                                        |
+| Тестирование  | Pest 5; отдельная PostgreSQL, параметры закреплены в phpunit.xml.                                                                                   |
 | Качество кода | Laravel Pint, PHPStan с Larastan, уровень 8; правила отступов и окончаний строк — в `.editorconfig`.                                                  |
 | Assets        | Vite и Tailwind CSS из Laravel skeleton; frontend RIE не входит в MVP.                                                                                |
 
@@ -90,29 +91,87 @@ Composer package, ручной replay терминальных операций 
 
 ## Локальный запуск
 
-Сейчас можно подготовить и запустить Laravel skeleton. Полного demo-окружения RIE ещё нет.
-Нужны PHP 8.4 с patch-релизом, удовлетворяющим [composer.lock](composer.lock), Composer, Node.js и npm,
-а также расширения PHP для зависимостей и выбранной базы данных.
-Проверенные версии Node.js/npm и версия PostgreSQL пока не закреплены.
+Для запуска нужны Docker Engine / Docker Desktop и современный Docker Compose. PHP, Composer и инструменты
+качества запускаются в PHP-контейнере; Node.js для текущей welcome page не требуется.
+Полного demo-окружения RIE ещё нет. Команды выполняются из корня репозитория.
 
-Из корня репозитория предусмотрены следующие команды:
-
-**`composer setup` изменяет локальное окружение:** устанавливает зависимости, создаёт `.env` из
-`.env.example`, если файла ещё нет, генерирует `APP_KEY`, выполняет миграции с `--force`,
-затем устанавливает npm dependencies с `--ignore-scripts` и собирает assets.
-Перед запуском проверьте, к какой базе подключает существующий `.env`: миграции применяются без подтверждения.
+1. Если `.env` отсутствует, скопируйте `.env.example` в `.env`. Существующий `.env` не перезаписывайте.
+   Укажите `DB_CONNECTION=pgsql`, `DB_HOST=postgres`, `DB_PORT=5432`, `DB_DATABASE=rie`, `DB_USERNAME=rie`,
+   локальный `DB_PASSWORD`; для запуска без миграций — `SESSION_DRIVER=file`, `CACHE_STORE=file`,
+   `QUEUE_CONNECTION=sync`. Удалите устаревший `DB_URL`, если он задан.
+   Демонстрационные пароли предназначены только для локальной разработки; реальные секреты храните в `.env` вне Git.
+2. На Linux задайте в `.env` `LOCAL_UID` и `LOCAL_GID` из вывода `id -u` и `id -g` владельца checkout.
+   По умолчанию используются `1000:1000`; Docker Desktop на macOS обычно не требует изменения.
+   PHP FPM и CLI работают от `www-data` с этими ID. Пользователю нужны права записи в `storage` и
+   `bootstrap/cache`; права `777` не требуются. После изменения ID пересоберите image.
+3. Запустите контейнеры и подготовьте Laravel:
 
 ```bash
-composer setup
-composer dev
+docker compose config --quiet
+docker compose up -d --build
+docker compose exec app composer install
+docker compose exec app php artisan config:clear
+# Только если APP_KEY ещё пуст:
+docker compose exec app php artisan key:generate
+docker compose exec app php artisan about
 ```
 
-`composer dev` вызывает Laravel `artisan dev`. По умолчанию в `.env.example` выбрана SQLite,
-а для queue, cache и sessions — драйвер `database`.
-В skeleton настроены welcome page `/` и health route `/up`; API операций пока отсутствует.
+`composer install` использует существующий lock-файл. Зависимости находятся в `vendor` bind mount,
+поэтому доступны CLI и FPM. Image содержит Composer 2, PostgreSQL extensions, `pcntl` и расширения для
+Laravel/Pest. Системные пакеты `libpq-dev`, `libonig-dev`, `libxml2-dev` нужны для сборки расширений;
+`git` и `unzip` — для установки Composer dependencies. Новые Composer dependencies не добавляются.
+Image можно использовать позднее для worker/scanner, переопределив команду; сами процессы ещё не реализованы.
 
-Эта последовательность описывает существующие scripts; запуск с чистого checkout ещё не проверен.
-Команды для PostgreSQL workers, poller и Fake Provider будут документированы после их реализации.
+Откройте [Laravel](http://localhost:8080) или проверьте HTTP:
+
+```bash
+curl --fail http://127.0.0.1:8080/
+docker compose exec nginx nginx -t
+docker compose ps
+```
+
+Порт задаётся `HTTP_PORT` в `.env`; при изменении согласуйте `APP_URL` и пересоздайте nginx через
+`docker compose up -d nginx`. Порт слушает только `127.0.0.1`. PostgreSQL и FPM не публикуются на хост;
+сервисы общаются через внутреннюю сеть Compose.
+
+Проверка реального подключения **через Laravel**, без миграций:
+
+```bash
+docker compose exec app php artisan tinker --execute='dump(DB::selectOne("SELECT 1 AS result")); dump(DB::selectOne("SHOW TIME ZONE"));'
+```
+
+Основные данные хранятся в named volume `postgres-data`, тестовые — в `postgres-test-data`.
+Для PostgreSQL 18 volumes монтируются в `/var/lib/postgresql`, стандартный PGDATA —
+`/var/lib/postgresql/18/docker`. Смена `DB_PASSWORD` в `.env` не меняет пароль уже созданного DB-пользователя;
+переменные `POSTGRES_*` применяются при первоначальной инициализации пустого volume.
+
+Миграции при старте не выполняются. На следующем этапе их можно применить вручную после проверки подключения:
+
+```bash
+docker compose exec app php artisan migrate
+```
+
+Эта команда создаёт таблицы; сейчас запускать её для проверки инфраструктуры не нужно.
+Стандартные миграции Laravel сохранены, миграций RIE нет.
+
+**Не используйте `composer setup` для этого этапа:** существующий script устанавливает зависимости,
+создаёт `.env`, генерирует ключ, выполняет миграции с `--force`, затем устанавливает npm dependencies и собирает assets.
+Перед любым будущим запуском проверьте целевую БД: миграции применяются без подтверждения.
+
+Остановка с сохранением обеих БД:
+
+```bash
+docker compose --profile test down
+```
+
+Повторный `docker compose up -d` использует сохранённые данные.
+**Осторожно: следующая команда безвозвратно удаляет оба volumes и все данные основной и тестовой БД:**
+
+```bash
+docker compose --profile test down --volumes
+```
+
+Команды для workers, poller и Fake Provider появятся после их реализации.
 
 ## Тестирование и инструменты качества
 
@@ -126,13 +185,34 @@ composer dev
 | `composer test`    | Очистка config cache и запуск тестов через Artisan.              |
 | `composer check`   | Последовательный запуск lint, analyse и test.                    |
 
-В [phpunit.xml](phpunit.xml) настроены suites Unit и Feature, SQLite `:memory:` и синхронная очередь.
-Сейчас есть только шаблонный Unit-тест; проверок поведения RIE нет.
+В [phpunit.xml](phpunit.xml) настроены suites Unit и Feature, синхронная очередь и принудительное подключение
+к `postgres-test:5432/rie_test` под отдельным пользователем `rie_test`. Пароль `rie-test-only` — публичное
+демонстрационное значение исключительно для изолированного локального тестового сервиса. `DB_URL` обнулён;
+параметры основной БД не наследуются. Дополнительный `.env.testing` не требуется.
+Smoke test проверяет `SELECT 1`, фактическое имя БД и UTC, без `RefreshDatabase` и создания таблиц.
+Проверок бизнес-поведения RIE пока нет.
+
+```bash
+docker compose --profile test up -d --wait postgres-test
+docker compose exec app composer check
+# Отдельные проверки:
+docker compose exec app php artisan test --group=integration
+docker compose exec app composer test
+docker compose exec app composer lint
+docker compose exec app composer analyse
+# Форматирование изменяет PHP-файлы:
+docker compose exec app composer format
+```
+
+Перед тестами не используйте production config cache; `composer test` очищает его автоматически.
+Тестовый сервис запускается только с profile `test` (или при явном указании сервиса).
 
 Для MVP запланированы Unit, интеграционные и e2e тесты, включая проверки конкурентного доступа
 на реальном PostgreSQL и как минимум один реальный e2e тест с PostgreSQL и Fake Provider.
 Обязательные сбойные сценарии перечислены в [спецификации](docs/RIE-MVP-architecture-v0.md).
-Результаты запуска проверок здесь не зафиксированы.
+В текущем checkout проверены сборка и запуск контейнеров, HTTP 200, `artisan about`, Laravel `SELECT 1`
+и UTC; `composer check` прошёл (Pint, PHPStan, 2 теста / 7 assertions). Установка dependencies с чистого
+checkout отдельно не проверялась; проверки использовали существующий `vendor`.
 
 ## Roadmap
 
@@ -140,7 +220,7 @@ composer dev
 
 | Этап                                    | Содержание                                                                                   | Статус                                                                                                                                                      |
 |-----------------------------------------|----------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Подготовка репозитория                  | Laravel skeleton, Docker Compose skeleton, первоначальный README, backlog и тест-кейсы.      | Частично готово: skeleton, настройки качества и README есть; Docker Compose, отдельного backlog и тестов RIE нет. Сценарии проверок описаны в спецификации. |
+| Подготовка репозитория                  | Laravel skeleton, Docker Compose skeleton, первоначальный README, backlog и тест-кейсы.      | Частично готово: skeleton, Docker Compose, настройки качества и README есть; отдельного backlog и тестов бизнес-логики RIE нет. Сценарии проверок описаны в спецификации. |
 | API и локальная идемпотентность         | Миграции операций, POST/GET API, локальная идемпотентность.                                  | Запланировано.                                                                                                                                              |
 | Конкурентная обработка и восстановление | Worker, конкурентный claim, lease/fencing, recovery.                                         | Запланировано.                                                                                                                                              |
 | Интеграция с Fake Provider              | Fake Provider и базовый HTTP adapter.                                                        | Запланировано.                                                                                                                                              |
