@@ -1,5 +1,6 @@
 <?php
 
+use Tests\DatabaseTestCase;
 use Tests\TestCase;
 
 /*
@@ -14,8 +15,10 @@ use Tests\TestCase;
 */
 
 pest()->extend(TestCase::class)
-    // ->use(RefreshDatabase::class)
-    ->in('Feature');
+    ->in('Feature/*.php');
+
+pest()->extend(DatabaseTestCase::class)
+    ->in('Feature/Database');
 
 /*
 |--------------------------------------------------------------------------
