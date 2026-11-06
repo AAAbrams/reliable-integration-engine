@@ -14,8 +14,9 @@ RIE — оригинальная эталонная реализация на La
 
 - Laravel skeleton со стандартной welcome page `/` и настроенным health route `/up`;
 - стандартные миграции Laravel для пользователей, sessions, cache и jobs;
+- миграции RIE для `external_operations` и `operation_attempts`;
 - конфигурация Pest, Laravel Pint и PHPStan с Larastan;
-- шаблонный Unit-тест и smoke test подключения к отдельной PostgreSQL;
+- шаблонный Unit-тест, smoke test подключения и интеграционные тесты схемы RIE на отдельной PostgreSQL;
 - Docker Compose с PHP FPM, Nginx, PostgreSQL 18 и тестовой PostgreSQL;
 - workflow GitHub Actions для проверки качества кода и тестов;
 - архитектурная спецификация и шаблон журнала решений.
@@ -148,14 +149,12 @@ docker compose exec app php artisan tinker --execute='dump(DB::selectOne("SELECT
 `/var/lib/postgresql/18/docker`. Смена `DB_PASSWORD` в `.env` не меняет пароль уже созданного DB-пользователя;
 переменные `POSTGRES_*` применяются при первоначальной инициализации пустого volume.
 
-Миграции при старте не выполняются. На следующем этапе их можно применить вручную после проверки подключения:
+Миграции при старте не выполняются. Чтобы создать таблицы Laravel и RIE в локальной БД приложения,
+проверьте целевое подключение и выполните:
 
 ```bash
 docker compose exec app php artisan migrate
 ```
-
-Эта команда создаёт таблицы; сейчас запускать её для проверки инфраструктуры не нужно.
-Стандартные миграции Laravel сохранены, миграций RIE нет.
 
 **Не используйте `composer setup` для этого этапа:** существующий script устанавливает зависимости,
 создаёт `.env`, генерирует ключ, выполняет миграции с `--force`, затем устанавливает npm dependencies и собирает assets.
@@ -197,7 +196,15 @@ docker compose --profile test down --volumes
 Дополнительный `.env.testing` не требуется.
 Smoke test проверяет фактический PDO-драйвер `pgsql`, `SELECT 1`, тестовую БД `rie_test` и UTC,
 без привязки к имени хоста, `RefreshDatabase` и создания таблиц.
-Проверок бизнес-поведения RIE пока нет.
+
+[Интеграционные тесты схемы](tests/Feature/Database) проверяют значения по умолчанию, ограничения таблиц
+и каскадное удаление попыток. Они используют [DatabaseTestCase](tests/DatabaseTestCase.php) с `RefreshDatabase`.
+Перед обновлением схемы базовый класс требует окружение `testing`, подключение `pgsql` и проверяет,
+что PostgreSQL сообщает имя БД и роль `rie_test`. При несовпадении тест останавливается до миграций.
+
+**Для тестов схемы используйте отдельную расходную БД.** При первом тесте с `RefreshDatabase` Laravel
+выполняет `migrate:fresh`, который удаляет существующие таблицы целевой БД и заново применяет миграции.
+Затем каждый тест выполняется в транзакции, которую Laravel откатывает по завершении.
 
 ```bash
 docker compose --profile test up -d --wait postgres-test
@@ -217,9 +224,9 @@ docker compose exec app composer format
 Для MVP запланированы Unit, интеграционные и e2e тесты, включая проверки конкурентного доступа
 на реальном PostgreSQL и как минимум один реальный e2e тест с PostgreSQL и Fake Provider.
 Обязательные сбойные сценарии перечислены в [спецификации](docs/RIE-MVP-architecture-v0.md).
-В текущем checkout проверены сборка и запуск контейнеров, HTTP 200, `artisan about`, Laravel `SELECT 1`
-и UTC; `composer check` прошёл (Pint, PHPStan, 2 теста / 7 assertions). Установка dependencies с чистого
-checkout отдельно не проверялась; проверки использовали существующий `vendor`.
+До добавления тестов схемы были проверены сборка и запуск контейнеров, HTTP 200, `artisan about`,
+Laravel `SELECT 1` и UTC. Установка dependencies с чистого checkout отдельно не проверялась.
+Проверки использовали существующий `vendor`.
 При подготовке CI повторно прошли `composer install` с существующим `vendor`, `composer validate --strict`,
 `composer check-platform-reqs` и `composer check` в `app`-контейнере. Отдельно прошёл smoke test
 с IP-адресом тестового контейнера через `DB_HOST` и посторонним `DB_URL`, который тестовая конфигурация обнуляет.
@@ -235,8 +242,8 @@ service container с healthcheck, без постоянного volume и без
 `composer install` из lock-файла с обычными Composer scripts, проверяют платформу и неизменность lock-файла,
 очищают Laravel config cache, запускают `composer lint`, `composer analyse` и `composer test` (Pest).
 Кешируются только скачанные Composer-архивы; `vendor` и данные PostgreSQL не сохраняются.
-Миграции и сборка frontend сейчас не нужны существующим тестам и в CI не запускаются.
-Проверку миграций можно добавить отдельным шагом перед тестами на следующем этапе.
+Тесты схемы применяют миграции через `RefreshDatabase` в шаге `composer test`. Отдельного шага миграций
+в workflow нет. Сборка frontend для этих тестов не требуется.
 
 Для первого запуска создайте pull request в `main` с workflow, откройте вкладку **Checks** либо
 **Actions → CI → Code quality and tests** и проверьте результат каждого шага, включая интеграционный smoke test.
@@ -260,7 +267,7 @@ Workflow проверен через `actionlint`; реальный запуск
 | Этап                                    | Содержание                                                                                   | Статус                                                                                                                                                      |
 |-----------------------------------------|----------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Подготовка репозитория                  | Laravel skeleton, Docker Compose skeleton, первоначальный README, backlog и тест-кейсы.      | Частично готово: skeleton, Docker Compose, настройки качества и README есть; отдельного backlog и тестов бизнес-логики RIE нет. Сценарии проверок описаны в спецификации. |
-| API и локальная идемпотентность         | Миграции операций, POST/GET API, локальная идемпотентность.                                  | Запланировано.                                                                                                                                              |
+| API и локальная идемпотентность         | Миграции операций, POST/GET API, локальная идемпотентность.                                  | Миграции и тесты схемы добавлены. API и обработка повторных запросов запланированы.                                                                            |
 | Конкурентная обработка и восстановление | Worker, конкурентный claim, lease/fencing, recovery.                                         | Запланировано.                                                                                                                                              |
 | Интеграция с Fake Provider              | Fake Provider и базовый HTTP adapter.                                                        | Запланировано.                                                                                                                                              |
 | Проверка надёжности и демонстрация      | Retry/polling, end-to-end resilience tests, актуализация README, walkthrough и демонстрация. | Запланировано.                                                                                                                                              |
