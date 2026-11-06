@@ -1,0 +1,10 @@
+{
+    "preset": "laravel",
+    "rules": {
+        "cast_spaces": {
+            "space": "single"
+        },
+        "not_operator_with_successor_space": true,
+        "not_operator_with_space": false
+    }
+}
